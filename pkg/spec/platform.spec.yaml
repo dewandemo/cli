@@ -490,6 +490,37 @@ nouns:
         expr: epochMs(it.createdAt)
 
 commands:
+  - command: migrate project:project
+    verb: migrate
+    noun: project
+    noun_to: project
+    short: "PARTIAL read-only secret inventory and capability planning (no apply)"
+    long: |
+      Inventory only the source project's selected secrets. Requires explicit
+      source/destination projects and --resources secret. The destination is not
+      checked or created; connectors, pipelines and other resources are NOT INVENTORIED.
+      Values, locators and raw definitions are never reported. Apply is unavailable.
+      Reports support text/JSON and --out to a NEW file only; existing files are never overwritten.
+    handler_type: workflow
+    workflow_id: project_copy
+    migrate_from:
+      presence: required
+      label: Source project identifier
+    migrate_to:
+      presence: required
+      label: Destination project identifier (not created)
+    flags:
+      - name: resources
+        required: true
+        description: "Explicit resource selection: secret only"
+      - name: dry-run
+        is_bool: true
+        description: "Read-only planning (also the default; no apply implementation)"
+      - name: apply
+        is_bool: true
+        hidden: true
+        description: "Unavailable; rejected before inventory"
+
   - command: list organization
     verb: list
     noun: organization
