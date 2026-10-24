@@ -19,19 +19,19 @@ func projectCopy(ctx *cmdctx.Ctx) error {
 	if err != nil {
 		return err
 	}
-	report, inventoryErr := projectcopy.Inventory(ctx.Context, projectcopy.NewTransport(ctx.Auth), scope)
+	report, copyErr := projectcopy.Copy(ctx.Context, projectcopy.NewTransport(ctx.Auth), scope, cmdctx.GetBool(ctx.FlagValues, "apply"))
 	if err := writeProjectCopyReport(ctx, report); err != nil {
 		return err
 	}
-	return inventoryErr
+	return copyErr
 }
 
 func projectCopyScope(ctx *cmdctx.Ctx) (projectcopy.Scope, error) {
-	if cmdctx.GetBool(ctx.FlagValues, "apply") || (ctx.ProvidedFlags["dry-run"] && !cmdctx.GetBool(ctx.FlagValues, "dry-run")) {
-		return projectcopy.Scope{}, errors.New("apply unavailable: this is PARTIAL read-only secret planning")
+	if ctx.ProvidedFlags["dry-run"] && !cmdctx.GetBool(ctx.FlagValues, "dry-run") && !cmdctx.GetBool(ctx.FlagValues, "apply") {
+		return projectcopy.Scope{}, errors.New("pass --apply to copy; --dry-run=false does not write")
 	}
-	if cmdctx.GetString(ctx.FlagValues, "resources") != "secret" {
-		return projectcopy.Scope{}, errors.New("select exactly --resources secret; other resources and apply are unavailable")
+	if cmdctx.GetString(ctx.FlagValues, "resources") != "cd-core" {
+		return projectcopy.Scope{}, errors.New("select --resources cd-core")
 	}
 	if ctx.Auth == nil {
 		return projectcopy.Scope{}, errors.New("resolved authentication required")
@@ -83,12 +83,50 @@ func renderProjectCopyReport(w io.Writer, format string, r projectcopy.Report) e
 		enc.SetIndent("", "  ")
 		return enc.Encode(r)
 	}
+	if r.Coverage == "cd-core" {
+		return renderCDCoreReport(w, r)
+	}
 	if _, err := fmt.Fprintf(w, "PARTIAL — read-only secret planning; apply unavailable\nAccount: %s; org: %s; source: %s; destination: %s\nSecret inventory complete: %t\nReadiness: %s\nNOT INVENTORIED: connectors, pipelines and all other project resources\n", r.Scope.Account, r.Scope.Org, r.Scope.Source, r.Scope.Destination, r.InventoryComplete, r.Readiness); err != nil {
 		return err
 	}
 	for _, item := range r.Secrets {
 		if _, err := fmt.Fprintf(w, "Secret #%d: %s — %s (%s)\n", item.Number, item.Type, item.Capability, item.Reason); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func renderCDCoreReport(w io.Writer, r projectcopy.Report) error {
+	if _, err := fmt.Fprintf(w, "cd-core %s\nAccount: %s; org: %s; source: %s; destination: %s\nReadiness: %s\n", r.Mode, r.Scope.Account, r.Scope.Org, r.Scope.Source, r.Scope.Destination, r.Readiness); err != nil {
+		return err
+	}
+	for _, item := range r.Results {
+		if _, err := fmt.Fprintf(w, "%s %s: %s", item.Kind, item.Identifier, item.Action); err != nil {
+			return err
+		}
+		if item.Reason != "" {
+			if _, err := fmt.Fprintf(w, " — %s", item.Reason); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+	}
+	for _, item := range r.DelegateSelectors {
+		if _, err := fmt.Fprintf(w, "delegate selector %s: %s — %s\n", item.Identifier, item.Action, item.Reason); err != nil {
+			return err
+		}
+	}
+	if len(r.SecretsPendingValue) > 0 {
+		if _, err := fmt.Fprintf(w, "Inline secrets were stored with placeholder value %s. Update each one before running the destination project:\n", projectcopy.InlineSecretPlaceholder); err != nil {
+			return err
+		}
+		for _, id := range r.SecretsPendingValue {
+			if _, err := fmt.Fprintf(w, "harness update secret %s --org %s --project %s --set value='...'\n", id, r.Scope.Org, r.Scope.Destination); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

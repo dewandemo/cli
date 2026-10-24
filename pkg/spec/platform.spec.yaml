@@ -494,13 +494,25 @@ commands:
     verb: migrate
     noun: project
     noun_to: project
-    short: "PARTIAL read-only secret inventory and capability planning (no apply)"
+    short: "Copy a project's CD core into another project in the same org"
     long: |
-      Inventory only the source project's selected secrets. Requires explicit
-      source/destination projects and --resources secret. The destination is not
-      checked or created; connectors, pipelines and other resources are NOT INVENTORIED.
-      Values, locators and raw definitions are never reported. Apply is unavailable.
-      Reports support text/JSON and --out to a NEW file only; existing files are never overwritten.
+      Copy project-scoped CD configuration from --from to --to in one org.
+      The destination project is created when it does not already exist.
+      Identical destination resources are skipped. Differing destination
+      content aborts the copy before any write.
+
+      --resources cd-core copies secrets, connectors, services, environments,
+      infrastructures, service overrides, templates, pipelines, input sets,
+      triggers, policies, and policy sets. Triggers are created disabled.
+      Git-backed entities are skipped. Org and account references are reported
+      and left in place. Delegate selectors are checked against connected
+      account delegates; delegates are not copied.
+
+      Inline SecretText values are not read. New inline secrets are stored
+      with the placeholder value 123456 and must be updated before use.
+      Reference secrets copy their manager and path. Other secret types are
+      blocked. The default is a plan; pass --apply to write.
+      Reports support text/JSON and --out to a NEW file only.
     handler_type: workflow
     workflow_id: project_copy
     migrate_from:
@@ -508,18 +520,17 @@ commands:
       label: Source project identifier
     migrate_to:
       presence: required
-      label: Destination project identifier (not created)
+      label: Destination project identifier
     flags:
       - name: resources
         required: true
-        description: "Explicit resource selection: secret only"
+        description: "Resource set to copy: cd-core"
       - name: dry-run
         is_bool: true
-        description: "Read-only planning (also the default; no apply implementation)"
+        description: "Plan only. This is the default."
       - name: apply
         is_bool: true
-        hidden: true
-        description: "Unavailable; rejected before inventory"
+        description: "Create the destination project if needed and copy resources"
 
   - command: list organization
     verb: list

@@ -36,6 +36,7 @@ func (s *secret) UnmarshalJSON(data []byte) error {
 	for key := range fields {
 		switch key {
 		case "identifier", "name", "orgIdentifier", "projectIdentifier", "type", "spec", "description", "tags":
+		case "createdAt", "lastModifiedAt", "yaml", "live", "draft", "governanceMetadata", "entityValidityDetails":
 		default:
 			s.Unproven = true
 		}
@@ -223,9 +224,14 @@ func classify(s *secret) Item {
 	default:
 		return item
 	}
-	var specType string
-	if s.Unproven || json.Unmarshal(s.Spec["type"], &specType) != nil || specType != s.Type {
+	if s.Unproven {
 		return item
+	}
+	if raw, ok := s.Spec["type"]; ok {
+		var specType string
+		if json.Unmarshal(raw, &specType) != nil || specType != s.Type {
+			return item
+		}
 	}
 	if s.Type != "SecretText" {
 		return item
@@ -233,6 +239,10 @@ func classify(s *secret) Item {
 	for key, value := range s.Spec {
 		switch key {
 		case "type", "valueType", "secretManagerIdentifier", "value":
+		case "additionalMetadata":
+			if string(value) != "null" && string(value) != "{}" {
+				return item
+			}
 		case "errorMessageForInvalidYaml":
 			if string(value) != `""` {
 				return item
@@ -245,7 +255,7 @@ func classify(s *secret) Item {
 	if json.Unmarshal(s.Spec["valueType"], &kind) != nil || json.Unmarshal(s.Spec["secretManagerIdentifier"], &manager) != nil || manager == "" {
 		return item
 	}
-	if raw, ok := s.Spec["value"]; ok && (string(raw) == "null" || json.Unmarshal(raw, &value) != nil) {
+	if raw, ok := s.Spec["value"]; ok && string(raw) != "null" && json.Unmarshal(raw, &value) != nil {
 		return item
 	}
 	managerID := manager

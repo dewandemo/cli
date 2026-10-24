@@ -195,6 +195,9 @@ func TestSecretCapabilities(t *testing.T) {
 		want   Capability
 	}{
 		{"reference", func(*secret) {}, ReferenceOnly},
+		{"live inline", func(s *secret) {
+			s.Spec = map[string]json.RawMessage{"secretManagerIdentifier": json.RawMessage(`"harnessSecretManager"`), "valueType": json.RawMessage(`"Inline"`), "value": json.RawMessage(`null`), "additionalMetadata": json.RawMessage(`null`)}
+		}, MappingRequired},
 		{"inline", func(s *secret) { s.Spec["valueType"] = json.RawMessage(`"Inline"`); delete(s.Spec, "value") }, MappingRequired},
 		{"unknown value type", func(s *secret) { s.Spec["valueType"] = json.RawMessage(`"Unknown"`) }, Blocked},
 		{"unknown field", func(s *secret) { s.Spec["credentials"] = json.RawMessage(`"` + marker + `"`) }, Blocked},

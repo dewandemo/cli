@@ -41,6 +41,79 @@ func wait(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// exchange performs one scoped API call. Response bodies are returned to the caller and never logged.
+// HTTP statuses are returned as-is so callers can tell a missing resource from a transport failure.
+func (t *Transport) exchange(ctx context.Context, method, path string, query url.Values, body, contentType string) (int, []byte, error) {
+	base, err := url.Parse(t.auth.APIUrl)
+	if err != nil || base.Scheme != "https" || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+		return 0, nil, errors.New("project copy requires a valid HTTPS API base URL without credentials, query or fragment")
+	}
+	base.Path = strings.TrimRight(base.Path, "/") + path
+	if query != nil {
+		base.RawQuery = query.Encode()
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		var reader io.Reader
+		if body != "" {
+			reader = strings.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, base.String(), reader)
+		if err != nil {
+			return 0, nil, errors.New("cannot prepare project copy request")
+		}
+		t.auth.SetAuthHeader(req)
+		req.Header.Set("Accept", "application/json")
+		if body != "" {
+			if contentType == "" {
+				contentType = "application/json"
+			}
+			req.Header.Set("Content-Type", contentType)
+		}
+		resp, err := t.http.Do(req)
+		if err != nil {
+			if attempt == 2 || ctx.Err() != nil {
+				return 0, nil, errors.New("project copy request failed")
+			}
+			if t.wait(ctx, time.Duration(attempt+1)*time.Second) != nil {
+				return 0, nil, errors.New("project copy cancelled")
+			}
+			continue
+		}
+		retry := resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504
+		if retry && attempt < 2 {
+			delay := time.Duration(attempt+1) * time.Second
+			if raw := resp.Header.Get("Retry-After"); raw != "" {
+				if seconds, e := strconv.Atoi(raw); e == nil && seconds >= 0 {
+					delay = time.Duration(min(seconds, 11)) * time.Second
+				} else if date, e := http.ParseTime(raw); e == nil {
+					delay = max(time.Until(date), 0)
+				} else {
+					resp.Body.Close()
+					return 0, nil, errors.New("project copy retry policy unavailable")
+				}
+			}
+			resp.Body.Close()
+			if delay > 10*time.Second {
+				return 0, nil, errors.New("project copy rate limited; retry later")
+			}
+			if t.wait(ctx, delay) != nil {
+				return 0, nil, errors.New("project copy cancelled")
+			}
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
+		resp.Body.Close()
+		if err != nil || len(data) > responseLimit {
+			return 0, nil, errors.New("project copy response incomplete or too large")
+		}
+		if len(data) > 0 && (!json.Valid(data) || !unambiguousJSON(data)) {
+			return 0, nil, errors.New("malformed project copy response")
+		}
+		return resp.StatusCode, data, nil
+	}
+	return 0, nil, errors.New("project copy retries exhausted")
+}
+
 // The POST below is a documented list operation, never a resource creation.
 func (t *Transport) read(ctx context.Context, scope Scope, id string, page int, target any) error {
 	base, err := url.Parse(t.auth.APIUrl)

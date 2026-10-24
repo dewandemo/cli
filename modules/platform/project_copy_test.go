@@ -16,7 +16,7 @@ import (
 )
 
 func copyContext() *cmdctx.Ctx {
-	return &cmdctx.Ctx{Auth: &auth.ResolvedAuth{AccountID: "fixture_account", OrgID: "fixture_org", ProjectID: "ignored_profile_project"}, MigrateFrom: "source", MigrateTo: "destination", FlagValues: map[string]any{"resources": "secret"}, ProvidedFlags: map[string]bool{}}
+	return &cmdctx.Ctx{Auth: &auth.ResolvedAuth{AccountID: "fixture_account", OrgID: "fixture_org", ProjectID: "ignored_profile_project"}, MigrateFrom: "source", MigrateTo: "destination", FlagValues: map[string]any{"resources": "cd-core"}, ProvidedFlags: map[string]bool{}}
 }
 
 func TestProjectCopyRejectsUnavailableWorkBeforeTransport(t *testing.T) {
@@ -24,7 +24,6 @@ func TestProjectCopyRejectsUnavailableWorkBeforeTransport(t *testing.T) {
 		name   string
 		modify func(*cmdctx.Ctx)
 	}{
-		{"apply", func(c *cmdctx.Ctx) { c.SetFlag("apply", true) }},
 		{"dry-run disabled", func(c *cmdctx.Ctx) { c.SetFlag("dry-run", false) }},
 		{"unsupported format", func(c *cmdctx.Ctx) { c.FormatFlags.Format = "yaml" }},
 		{"mixed resources", func(c *cmdctx.Ctx) { c.SetFlag("resources", "secret,pipeline") }},
@@ -48,6 +47,11 @@ func TestProjectCopyRejectsUnavailableWorkBeforeTransport(t *testing.T) {
 		})
 	}
 	c := copyContext()
+	c.SetFlag("apply", true)
+	if _, err := projectCopyScope(c); err != nil {
+		t.Fatal(err)
+	}
+	c = copyContext()
 	s, err := projectCopyScope(c)
 	if err != nil || s.Source != "source" || s.Destination != "destination" {
 		t.Fatal("profile project replaced explicit locations")
