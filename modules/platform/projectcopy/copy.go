@@ -26,6 +26,18 @@ func Copy(ctx context.Context, t *Transport, scope Scope, apply bool) (Report, e
 	return c.report, err
 }
 
+func (c *copier) rewriteOpts(disableTriggers bool) rewriteOpts {
+	return rewriteOpts{Org: c.scope.Org, Project: c.scope.Destination, SourceOrg: c.scope.Org, SourceProject: c.scope.Source, DisableTriggers: disableTriggers}
+}
+
+func (c *copier) rewriteDoc(doc string, disableTriggers bool) (string, error) {
+	return rewriteYAML(doc, c.rewriteOpts(disableTriggers))
+}
+
+func (c *copier) rewriteObj(v any) {
+	rewriteTree(v, c.rewriteOpts(false))
+}
+
 type copier struct {
 	ctx         context.Context
 	transport   *Transport
@@ -309,7 +321,7 @@ func (c *copier) planConnectors() error {
 		}
 		source := cleanRoot(item)
 		c.observe(source)
-		rewriteTree(source, c.scope.Org, c.scope.Destination, false)
+		c.rewriteObj(source)
 		destRaw, found, err := c.getObject("/ng/api/connectors/"+url.PathEscape(id), c.query(c.scope.Destination))
 		if err != nil {
 			return err
@@ -317,7 +329,7 @@ func (c *copier) planConnectors() error {
 		if found {
 			dest, _ := digMap(destRaw, "data", "connector")
 			cleaned := cleanRoot(dest)
-			rewriteTree(cleaned, c.scope.Org, c.scope.Destination, false)
+			c.rewriteObj(cleaned)
 			if canonicalJSON(cleaned) == canonicalJSON(source) {
 				c.keep(Result{Kind: "connector", Identifier: id, Action: ActionSkip, Reason: "destination matches"})
 				continue
@@ -363,7 +375,7 @@ func (c *copier) planYAMLList(kind, path, root, parent string, extra url.Values)
 			c.block(kind, id, "definition missing")
 			continue
 		}
-		rewritten, err := rewriteYAML(sourceDoc, c.scope.Org, c.scope.Destination, false)
+		rewritten, err := c.rewriteDoc(sourceDoc, false)
 		if err != nil {
 			c.block(kind, id, "definition could not be rewritten")
 			continue
@@ -385,7 +397,7 @@ func (c *copier) planYAMLList(kind, path, root, parent string, extra url.Values)
 			})
 			continue
 		}
-		destRewritten, err := rewriteYAML(destDoc, c.scope.Org, c.scope.Destination, false)
+		destRewritten, err := c.rewriteDoc(destDoc, false)
 		if err != nil || !sameDocument(rewritten, destRewritten) {
 			c.conflictResult(kind, reportID)
 			continue
@@ -513,7 +525,7 @@ func (c *copier) planOverrides(env string) error {
 		}
 		source := cleanRoot(item)
 		c.observe(source)
-		rewriteTree(source, c.scope.Org, c.scope.Destination, false)
+		c.rewriteObj(source)
 		destRaw, found, err := c.getObject("/ng/api/serviceOverrides/"+url.PathEscape(stringField(item, "identifier")), c.query(c.scope.Destination))
 		if err != nil {
 			return err
@@ -521,7 +533,7 @@ func (c *copier) planOverrides(env string) error {
 		if found {
 			dest, _ := digMap(destRaw, "data")
 			cleaned := cleanRoot(dest)
-			rewriteTree(cleaned, c.scope.Org, c.scope.Destination, false)
+			c.rewriteObj(cleaned)
 			if canonicalJSON(cleaned) == canonicalJSON(source) {
 				c.keep(Result{Kind: "service_override", Identifier: id, Action: ActionSkip, Reason: "destination matches"})
 				continue
@@ -571,7 +583,7 @@ func (c *copier) planTemplates() error {
 		if doc == "" {
 			doc = stringField(obj, "yaml")
 		}
-		rewritten, err := rewriteYAML(doc, c.scope.Org, c.scope.Destination, false)
+		rewritten, err := c.rewriteDoc(doc, false)
 		if err != nil || rewritten == "" {
 			c.block("template", reportID, "template definition missing")
 			continue
@@ -584,7 +596,7 @@ func (c *copier) planTemplates() error {
 		if destFound {
 			destData, _ := digMap(destObj, "data")
 			destDoc := stringField(destData, "yaml")
-			destRewritten, rerr := rewriteYAML(destDoc, c.scope.Org, c.scope.Destination, false)
+			destRewritten, rerr := c.rewriteDoc(destDoc, false)
 			if rerr != nil || !sameDocument(rewritten, destRewritten) {
 				c.conflictResult("template", reportID)
 				continue
@@ -629,7 +641,7 @@ func (c *copier) planPipelines() error {
 			c.block("pipeline", id, "pipeline definition missing")
 			continue
 		}
-		rewritten, err := rewriteYAML(doc, c.scope.Org, c.scope.Destination, false)
+		rewritten, err := c.rewriteDoc(doc, false)
 		if err != nil {
 			c.block("pipeline", id, "pipeline definition could not be rewritten")
 			continue
@@ -646,7 +658,7 @@ func (c *copier) planPipelines() error {
 			})
 			continue
 		}
-		destRewritten, rerr := rewriteYAML(destDoc, c.scope.Org, c.scope.Destination, false)
+		destRewritten, rerr := c.rewriteDoc(destDoc, false)
 		if rerr != nil || !sameDocument(rewritten, destRewritten) {
 			c.conflictResult("pipeline", id)
 			continue
@@ -710,7 +722,7 @@ func (c *copier) planPipelineDocs(kind, pipeline, path, yamlKey string, disable 
 			data, _ := digMap(obj, "data")
 			doc = stringField(data, yamlKey, "yaml", "inputSetYaml")
 		}
-		rewritten, err := rewriteYAML(doc, c.scope.Org, c.scope.Destination, disable)
+		rewritten, err := c.rewriteDoc(doc, disable)
 		if err != nil || rewritten == "" {
 			c.block(kind, reportID, "definition could not be rewritten")
 			continue
@@ -723,7 +735,7 @@ func (c *copier) planPipelineDocs(kind, pipeline, path, yamlKey string, disable 
 		if destFound {
 			destData, _ := digMap(destObj, "data")
 			destDoc := stringField(destData, yamlKey, "yaml", "inputSetYaml")
-			destRewritten, rerr := rewriteYAML(destDoc, c.scope.Org, c.scope.Destination, disable)
+			destRewritten, rerr := c.rewriteDoc(destDoc, disable)
 			if rerr != nil || !sameDocument(rewritten, destRewritten) {
 				c.conflictResult(kind, reportID)
 				continue
@@ -1115,15 +1127,13 @@ func (c *copier) list(method, path string, query url.Values, body, pageParam, si
 			return nil, err
 		}
 		if status != http.StatusOK {
-			if page > 0 && (status == http.StatusBadRequest || status == http.StatusNotFound) {
-				return all, nil
-			}
 			return nil, fmt.Errorf("project copy list failed: status %d", status)
 		}
-		items, totalPages, err := extractItems(data)
+		pageData, err := extractItems(data)
 		if err != nil {
 			return nil, err
 		}
+		items := pageData.Items
 		if wrap != "" {
 			unwrapped := make([]map[string]any, 0, len(items))
 			for _, item := range items {
@@ -1150,51 +1160,92 @@ func (c *copier) list(method, path string, query url.Values, body, pageParam, si
 			fresh++
 			all = append(all, item)
 		}
-		if len(items) == 0 || len(items) < 100 || (totalPages > 0 && page+1 >= totalPages) || fresh == 0 {
-			return all, nil
-		}
 		if len(all) > 100000 {
 			return nil, errors.New("project copy list exceeded 100000 items")
+		}
+		more := false
+		switch {
+		case pageData.HasTotalPages:
+			more = page+1 < pageData.TotalPages
+			if !more && pageData.HasTotalItems && len(all) != pageData.TotalItems {
+				return nil, errors.New("project copy list incomplete")
+			}
+		case pageData.HasTotalItems:
+			more = len(all) < pageData.TotalItems
+		default:
+			more = len(items) == 100
+		}
+		if !more {
+			return all, nil
+		}
+		if len(items) == 0 || fresh == 0 {
+			return nil, errors.New("project copy list incomplete")
 		}
 	}
 	return nil, errors.New("project copy list exceeded page limit")
 }
 
-func extractItems(body []byte) ([]map[string]any, int, error) {
+type listPage struct {
+	Items         []map[string]any
+	TotalPages    int
+	TotalItems    int
+	HasTotalPages bool
+	HasTotalItems bool
+}
+
+func extractItems(body []byte) (listPage, error) {
 	if len(body) == 0 {
-		return nil, 0, errors.New("project copy list returned an empty body")
+		return listPage{}, errors.New("project copy list returned an empty body")
 	}
 	var top any
 	if err := json.Unmarshal(body, &top); err != nil {
-		return nil, 0, errors.New("malformed project copy list")
+		return listPage{}, errors.New("malformed project copy list")
 	}
 	switch node := top.(type) {
 	case []any:
-		return mapsOf(node), 1, nil
+		items := mapsOf(node)
+		return listPage{Items: items, TotalPages: 1, HasTotalPages: true, TotalItems: len(items), HasTotalItems: true}, nil
 	case map[string]any:
-		if !strings.EqualFold(stringField(node, "status"), "") && !strings.EqualFold(stringField(node, "status"), "SUCCESS") && stringField(node, "status") != "" {
-			if !strings.EqualFold(stringField(node, "status"), "SUCCESS") {
-				return nil, 0, errors.New("project copy list failed")
-			}
+		if status := stringField(node, "status"); status != "" && !strings.EqualFold(status, "SUCCESS") {
+			return listPage{}, errors.New("project copy list failed")
 		}
 		data := node
-		if inner, ok := asMap(node["data"]); ok {
+		if raw, exists := node["data"]; exists {
+			inner, ok := asMap(raw)
+			if !ok {
+				return listPage{}, errors.New("unrecognized project copy list")
+			}
 			data = inner
 		}
+		var items []any
+		found := false
 		for _, key := range []string{"content", "policies", "policy_sets", "policysets", "resource"} {
-			if items, ok := asSlice(data[key]); ok {
-				return mapsOf(items), intFrom(data["totalPages"]), nil
+			if arr, ok := asSlice(data[key]); ok {
+				items, found = arr, true
+				break
 			}
-			if items, ok := asSlice(node[key]); ok {
-				return mapsOf(items), intFrom(node["totalPages"]), nil
+			if arr, ok := asSlice(node[key]); ok {
+				items, found = arr, true
+				break
 			}
 		}
-		if intFrom(data["totalItems"]) == 0 && intFrom(data["totalElements"]) == 0 && data["content"] == nil && node["resource"] == nil {
-			return nil, intFrom(data["totalPages"]), nil
+		if !found {
+			return listPage{}, errors.New("unrecognized project copy list")
 		}
-		return nil, 0, errors.New("unrecognized project copy list")
+		page := listPage{Items: mapsOf(items)}
+		if _, ok := data["totalPages"]; ok {
+			page.HasTotalPages, page.TotalPages = true, intFrom(data["totalPages"])
+		} else if _, ok := node["totalPages"]; ok {
+			page.HasTotalPages, page.TotalPages = true, intFrom(node["totalPages"])
+		}
+		if v, ok := data["totalItems"]; ok {
+			page.HasTotalItems, page.TotalItems = true, intFrom(v)
+		} else if v, ok := data["totalElements"]; ok {
+			page.HasTotalItems, page.TotalItems = true, intFrom(v)
+		}
+		return page, nil
 	default:
-		return nil, 0, errors.New("unrecognized project copy list")
+		return listPage{}, errors.New("unrecognized project copy list")
 	}
 }
 

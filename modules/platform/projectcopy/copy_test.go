@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -129,12 +130,49 @@ func TestCDEnvelopeWrapsServiceYAML(t *testing.T) {
 }
 
 func TestRewriteDisablesTriggersAndRewritesProject(t *testing.T) {
-	doc, err := rewriteYAML("trigger:\n  identifier: push\n  enabled: true\n  pipelineIdentifier: deploy\n  projectIdentifier: source\n", testScope.Org, testScope.Destination, true)
+	doc, err := rewriteYAML("trigger:\n  identifier: push\n  enabled: true\n  pipelineIdentifier: deploy\n  projectIdentifier: source\n", rewriteOpts{Org: testScope.Org, Project: testScope.Destination, SourceOrg: testScope.Org, SourceProject: testScope.Source, DisableTriggers: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(doc, "projectIdentifier: "+testScope.Destination) || !strings.Contains(doc, "enabled: false") || strings.Contains(doc, "projectIdentifier: source") {
 		t.Fatal(doc)
+	}
+}
+
+func TestRewritePreservesCrossProjectRefs(t *testing.T) {
+	doc, err := rewriteYAML("pipeline:\n  projectIdentifier: source\n  stages:\n    - stage:\n        spec:\n          pipeline:\n            projectIdentifier: other_project\n            orgIdentifier: other_org\n", rewriteOpts{Org: testScope.Org, Project: testScope.Destination, SourceOrg: testScope.Org, SourceProject: testScope.Source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(doc, "projectIdentifier: "+testScope.Destination) || !strings.Contains(doc, "projectIdentifier: other_project") || !strings.Contains(doc, "orgIdentifier: other_org") {
+		t.Fatal(doc)
+	}
+}
+
+func TestListFailsClosedOnLaterPageError(t *testing.T) {
+	calls := 0
+	tr := fakeTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return response(200, `{"status":"SUCCESS","data":{"content":[{"identifier":"a"}],"totalItems":2,"totalPages":2}}`), nil
+		}
+		return response(404, `{"status":"ERROR","code":"RESOURCE_NOT_FOUND"}`), nil
+	})
+	c := &copier{ctx: context.Background(), transport: tr, scope: testScope}
+	if _, err := c.list(http.MethodGet, "/items", url.Values{}, "", "page", "size", ""); err == nil {
+		t.Fatal("later page 404 accepted as complete")
+	}
+}
+
+func TestExtractItemsRejectsUnprovenLists(t *testing.T) {
+	for _, body := range []string{`{}`, `{"status":"SUCCESS"}`, `{"status":"SUCCESS","data":null}`, `{"status":"ERROR","data":{"content":[]}}`} {
+		if _, err := extractItems([]byte(body)); err == nil {
+			t.Fatalf("accepted %s", body)
+		}
+	}
+	page, err := extractItems([]byte(`{"status":"SUCCESS","data":{"content":[],"totalItems":0,"totalPages":0}}`))
+	if err != nil || len(page.Items) != 0 || !page.HasTotalItems {
+		t.Fatalf("%v %#v", err, page)
 	}
 }
 

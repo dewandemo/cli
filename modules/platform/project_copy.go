@@ -19,15 +19,50 @@ func projectCopy(ctx *cmdctx.Ctx) error {
 	if err != nil {
 		return err
 	}
-	report, copyErr := projectcopy.Copy(ctx.Context, projectcopy.NewTransport(ctx.Auth), scope, cmdctx.GetBool(ctx.FlagValues, "apply"))
-	if err := writeProjectCopyReport(ctx, report); err != nil {
+	out, closeOut, err := openProjectCopyOut(ctx)
+	if err != nil {
 		return err
+	}
+	if closeOut != nil {
+		defer closeOut()
+	}
+	report, copyErr := projectcopy.Copy(ctx.Context, projectcopy.NewTransport(ctx.Auth), scope, projectCopyShouldApply(ctx))
+	if err := renderProjectCopyReport(out, reportFormat(ctx), report); err != nil {
+		if copyErr != nil {
+			return copyErr
+		}
+		return errors.New("cannot write project planning report")
 	}
 	return copyErr
 }
 
+func projectCopyShouldApply(ctx *cmdctx.Ctx) bool {
+	if cmdctx.GetBool(ctx.FlagValues, "dry-run") {
+		return false
+	}
+	return cmdctx.GetBool(ctx.FlagValues, "apply")
+}
+
+func reportFormat(ctx *cmdctx.Ctx) string {
+	if ctx.FormatFlags.Format == "" {
+		return "text"
+	}
+	return ctx.FormatFlags.Format
+}
+
+func openProjectCopyOut(ctx *cmdctx.Ctx) (io.Writer, func(), error) {
+	if ctx.FormatFlags.OutFile == "" {
+		return os.Stdout, nil, nil
+	}
+	f, err := os.OpenFile(ctx.FormatFlags.OutFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return nil, nil, errors.New("cannot create report: --out must name a new file")
+	}
+	return f, func() { _ = f.Close() }, nil
+}
+
 func projectCopyScope(ctx *cmdctx.Ctx) (projectcopy.Scope, error) {
-	if ctx.ProvidedFlags["dry-run"] && !cmdctx.GetBool(ctx.FlagValues, "dry-run") && !cmdctx.GetBool(ctx.FlagValues, "apply") {
+	if ctx.ProvidedFlags["dry-run"] && !cmdctx.GetBool(ctx.FlagValues, "dry-run") && !projectCopyShouldApply(ctx) {
 		return projectcopy.Scope{}, errors.New("pass --apply to copy; --dry-run=false does not write")
 	}
 	if cmdctx.GetString(ctx.FlagValues, "resources") != "cd-core" {
@@ -50,28 +85,14 @@ func projectCopyScope(ctx *cmdctx.Ctx) (projectcopy.Scope, error) {
 }
 
 func writeProjectCopyReport(ctx *cmdctx.Ctx, report projectcopy.Report) error {
-	format := ctx.FormatFlags.Format
-	if format == "" {
-		format = "text"
+	out, closeOut, err := openProjectCopyOut(ctx)
+	if err != nil {
+		return err
 	}
-	if format != "text" && format != "json" {
-		return errors.New("project planning supports --format text or json")
+	if closeOut != nil {
+		defer closeOut()
 	}
-	var w io.Writer = os.Stdout
-	if ctx.FormatFlags.OutFile != "" {
-		// Exclusive creation also rejects symlinks/hardlinks to profiles or other inputs.
-		f, err := os.OpenFile(ctx.FormatFlags.OutFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if err != nil {
-			return errors.New("cannot create report: --out must name a new file")
-		}
-		writeErr := renderProjectCopyReport(f, format, report)
-		closeErr := f.Close()
-		if writeErr != nil || closeErr != nil {
-			return errors.New("cannot write project planning report")
-		}
-		return nil
-	}
-	if err := renderProjectCopyReport(w, format, report); err != nil {
+	if err := renderProjectCopyReport(out, reportFormat(ctx), report); err != nil {
 		return errors.New("cannot write project planning report")
 	}
 	return nil

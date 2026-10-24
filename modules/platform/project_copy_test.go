@@ -52,6 +52,26 @@ func TestProjectCopyRejectsUnavailableWorkBeforeTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	c = copyContext()
+	c.SetFlag("dry-run", true)
+	c.SetFlag("apply", true)
+	if projectCopyShouldApply(c) {
+		t.Fatal("dry-run must not apply")
+	}
+	if _, err := projectCopyScope(c); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(t.TempDir(), "report")
+	os.WriteFile(existing, []byte("kept"), 0600)
+	c = copyContext()
+	c.SetFlag("apply", true)
+	c.FormatFlags.OutFile = existing
+	if err := projectCopy(c); err == nil || !strings.Contains(err.Error(), "cannot create report") {
+		t.Fatalf("existing --out must fail before copy: %v", err)
+	}
+	if data, _ := os.ReadFile(existing); string(data) != "kept" {
+		t.Fatal("existing --out changed")
+	}
+	c = copyContext()
 	s, err := projectCopyScope(c)
 	if err != nil || s.Source != "source" || s.Destination != "destination" {
 		t.Fatal("profile project replaced explicit locations")

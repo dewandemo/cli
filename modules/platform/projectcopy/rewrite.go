@@ -22,13 +22,18 @@ var rootDrop = map[string]bool{
 	"yamlVersion": true, "entityValidity": true,
 }
 
-func rewriteYAML(doc, org, project string, disableTriggers bool) (string, error) {
+type rewriteOpts struct {
+	Org, Project, SourceOrg, SourceProject string
+	DisableTriggers                        bool
+}
+
+func rewriteYAML(doc string, opts rewriteOpts) (string, error) {
 	var node any
 	if err := yaml.Unmarshal([]byte(doc), &node); err != nil {
 		return "", err
 	}
 	node = yamlToPlain(node)
-	rewriteTree(node, org, project, disableTriggers)
+	rewriteTree(node, opts)
 	out, err := yaml.Marshal(node)
 	if err != nil {
 		return "", err
@@ -74,16 +79,16 @@ func toString(v any) string {
 	return s
 }
 
-func rewriteTree(v any, org, project string, disableTriggers bool) {
+func rewriteTree(v any, opts rewriteOpts) {
 	switch n := v.(type) {
 	case map[string]any:
-		if _, ok := n["projectIdentifier"]; ok {
-			n["projectIdentifier"] = project
+		if cur, ok := n["projectIdentifier"].(string); ok && cur == opts.SourceProject {
+			n["projectIdentifier"] = opts.Project
 		}
-		if _, ok := n["orgIdentifier"]; ok {
-			n["orgIdentifier"] = org
+		if cur, ok := n["orgIdentifier"].(string); ok && cur == opts.SourceOrg {
+			n["orgIdentifier"] = opts.Org
 		}
-		if disableTriggers {
+		if opts.DisableTriggers {
 			if _, ok := n["pipelineIdentifier"]; ok {
 				if _, ok := n["enabled"]; ok {
 					n["enabled"] = false
@@ -92,16 +97,16 @@ func rewriteTree(v any, org, project string, disableTriggers bool) {
 		}
 		for k, child := range n {
 			if s, ok := child.(string); ok && (k == "yaml" || k == "yamlPipeline" || k == "inputSetYaml") && strings.Contains(s, "projectIdentifier") {
-				if rewritten, err := rewriteYAML(s, org, project, disableTriggers); err == nil {
+				if rewritten, err := rewriteYAML(s, opts); err == nil {
 					n[k] = rewritten
 					continue
 				}
 			}
-			rewriteTree(child, org, project, disableTriggers)
+			rewriteTree(child, opts)
 		}
 	case []any:
 		for i := range n {
-			rewriteTree(n[i], org, project, disableTriggers)
+			rewriteTree(n[i], opts)
 		}
 	}
 }
