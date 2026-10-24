@@ -381,7 +381,7 @@ func (c *copier) planYAMLList(kind, path, root, parent string, extra url.Values)
 			doc := rewritten
 			createPath, createQuery := yamlCreate(kind, id, parent)
 			c.queue(Result{Kind: kind, Identifier: reportID, Action: ActionCreate}, func() error {
-				return c.postYAML(createPath, createQuery, doc)
+				return c.postCDYAML(kind, createPath, createQuery, doc)
 			})
 			continue
 		}
@@ -1039,15 +1039,70 @@ func (c *copier) postYAML(path string, query url.Values, body string) error {
 	return c.write(http.MethodPost, path, query, body, "application/yaml")
 }
 
+// postCDYAML posts service/environment/infrastructure YAML in the NG JSON envelope
+// {identifier, name, orgIdentifier, projectIdentifier, yaml: "<resource yaml>"}.
+func (c *copier) postCDYAML(kind, path string, extra url.Values, doc string) error {
+	env, err := cdEnvelope(kind, doc)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	query := c.query(c.scope.Destination)
+	if extra != nil {
+		query = mergeQuery(query, extra)
+	}
+	return c.postJSON(path, query, string(raw))
+}
+
+func cdEnvelope(wrapper, rawBody string) (map[string]any, error) {
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(rawBody), &parsed); err != nil || parsed == nil {
+		return nil, errors.New("definition could not be wrapped for create")
+	}
+	plain, _ := yamlToPlain(parsed).(map[string]any)
+	if plain == nil {
+		return nil, errors.New("definition could not be wrapped for create")
+	}
+	inner := plain
+	if wrapped, ok := plain[wrapper].(map[string]any); ok {
+		inner = wrapped
+	}
+	env := map[string]any{"yaml": rawBody}
+	for _, key := range []string{"identifier", "name", "orgIdentifier", "projectIdentifier", "description", "tags", "type", "environmentRef"} {
+		if value, ok := inner[key]; ok {
+			env[key] = value
+		}
+	}
+	return env, nil
+}
+
 func (c *copier) write(method, path string, query url.Values, body, contentType string) error {
-	status, _, err := c.transport.exchange(c.ctx, method, path, query, body, contentType)
+	status, resp, err := c.transport.exchange(c.ctx, method, path, query, body, contentType)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("project copy write failed: status %d", status)
+		return writeFailure(status, resp)
 	}
 	return nil
+}
+
+func writeFailure(status int, body []byte) error {
+	msg := fmt.Sprintf("project copy write failed: status %d", status)
+	var obj map[string]any
+	if json.Unmarshal(body, &obj) != nil {
+		return errors.New(msg)
+	}
+	if code := stringField(obj, "code"); code != "" && len(code) < 80 {
+		msg += " " + code
+	}
+	if message := stringField(obj, "message"); message != "" && len(message) < 240 {
+		msg += ": " + message
+	}
+	return errors.New(msg)
 }
 
 func (c *copier) list(method, path string, query url.Values, body, pageParam, sizeParam, wrap string) ([]map[string]any, error) {

@@ -114,6 +114,20 @@ func TestCopyAcceptsLiveInlineSecretSchema(t *testing.T) {
 	}
 }
 
+func TestCDEnvelopeWrapsServiceYAML(t *testing.T) {
+	env, err := cdEnvelope("service", "service:\n  identifier: demo_app\n  name: demo-app\n  orgIdentifier: fixture_org\n  projectIdentifier: destination\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["identifier"] != "demo_app" || env["projectIdentifier"] != "destination" {
+		t.Fatalf("%v", env)
+	}
+	yamlField, _ := env["yaml"].(string)
+	if !strings.Contains(yamlField, "identifier: demo_app") {
+		t.Fatal(yamlField)
+	}
+}
+
 func TestRewriteDisablesTriggersAndRewritesProject(t *testing.T) {
 	doc, err := rewriteYAML("trigger:\n  identifier: push\n  enabled: true\n  pipelineIdentifier: deploy\n  projectIdentifier: source\n", testScope.Org, testScope.Destination, true)
 	if err != nil {
@@ -290,6 +304,12 @@ func (a *copyAPI) storedYAML(key, root string) (int, string) {
 	doc, ok := a.stored[key]
 	if !ok {
 		return 404, `{"status":"ERROR","code":"RESOURCE_NOT_FOUND"}`
+	}
+	var env map[string]any
+	if json.Unmarshal([]byte(doc), &env) == nil {
+		if inner, ok := env["yaml"].(string); ok {
+			doc = inner
+		}
 	}
 	return 200, `{"status":"SUCCESS","data":{"` + root + `":{"yaml":` + jsonString(doc) + `}}}`
 }
